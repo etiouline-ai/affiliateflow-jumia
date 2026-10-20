@@ -1,0 +1,11 @@
+.git
+*.db
+*.db-journal
+*.log
+__pycache__
+*.ps1
+*.bat
+render.yaml
+Procfile
+README.md
+LICENSE
