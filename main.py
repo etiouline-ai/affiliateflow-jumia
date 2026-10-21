@@ -247,8 +247,12 @@ def startup_event():
 
 
 @app.get("/")
-def read_index() -> FileResponse:
-    return FileResponse(BASE_DIR / "static" / "index.html")
+def read_index() -> HTMLResponse:
+    content = (BASE_DIR / "static" / "index.html").read_text(encoding="utf-8")
+    pixel = _pixel_snippet()
+    if pixel:
+        content = content.replace("</head>", f"{pixel}\n</head>")
+    return HTMLResponse(content=content)
 
 
 @app.get("/api/health")
