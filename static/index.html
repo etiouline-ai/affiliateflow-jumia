@@ -359,6 +359,7 @@
             <button class="copy-link" onclick="copyText('${lpUrl}')">Landing</button>
             <button class="ghost" onclick="toggleCampaign('${c.id}', '${c.status}')">${c.status === 'active' ? 'Pause' : 'Activer'}</button>
             <button class="ghost" onclick="addConversion('${c.id}', ${c.price})">+ Vente</button>
+            <button class="ghost" onclick="deleteCampaign('${c.id}')">Supprimer</button>
           </td>`;
         campBody.appendChild(tr);
       });
@@ -423,6 +424,13 @@
       body: JSON.stringify({ amount: parseFloat(amount) })
     });
     toast('Vente enregistree');
+    loadAll();
+  }
+
+  async function deleteCampaign(id) {
+    if (!confirm('Supprimer cette campagne et ses statistiques ?')) return;
+    await api(`/api/campaigns/${id}`, { method: 'DELETE' });
+    toast('Campagne supprimee');
     loadAll();
   }
 

@@ -601,6 +601,16 @@ def update_campaign_status(campaign_id: str, status: str) -> dict:
     return {"message": "Status updated", "status": status}
 
 
+@app.delete("/api/campaigns/{campaign_id}")
+def delete_campaign(campaign_id: str) -> dict:
+    conn = get_db_connection()
+    conn.execute("DELETE FROM ad_events WHERE campaign_id = ?", (campaign_id,))
+    conn.execute("DELETE FROM ad_campaigns WHERE id = ?", (campaign_id,))
+    conn.commit()
+    conn.close()
+    return {"message": "Campaign deleted", "id": campaign_id}
+
+
 @app.get("/api/ads/config")
 def get_ads_config() -> dict:
     return {
