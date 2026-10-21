@@ -633,6 +633,18 @@ def create_campaign_conversion(campaign_id: str, payload: AdConversionCreate) ->
         "INSERT INTO ad_events (id, campaign_id, event_type, amount, created_at) VALUES (?, ?, ?, ?, ?)",
         (str(uuid.uuid4()), campaign_id, "conversion", amount, datetime.utcnow().isoformat()),
     )
+    conn.execute(
+        """
+        UPDATE affiliate_links
+        SET conversions = conversions + 1, revenue = revenue + ?, commission = commission + ?
+        WHERE id = ?
+        """,
+        (amount, commission_value, link["id"]),
+    )
+    conn.execute(
+        "INSERT INTO stats (id, link_id, event_type, source, amount, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), link["id"], "conversion", campaign["platform"], amount, datetime.utcnow().isoformat()),
+    )
     conn.commit()
     conn.close()
     return {"message": "Conversion recorded", "commission": round(commission_value, 2)}
