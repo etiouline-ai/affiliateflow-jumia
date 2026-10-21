@@ -183,6 +183,11 @@ def health() -> dict:
     return {"status": "ok", "database": str(DB_PATH)}
 
 
+@app.api_route("/api/ping", methods=["GET", "HEAD"])
+def ping() -> dict:
+    return {"pong": True}
+
+
 @app.get("/api/dashboard")
 def get_dashboard() -> dict:
     conn = get_db_connection()
