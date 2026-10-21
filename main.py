@@ -104,23 +104,21 @@ def seed_demo_data() -> None:
         return
 
     now = datetime.utcnow().isoformat()
-    brand_id = "jumia-partenaires"
+    brand_id = "systeme-io"
     affiliate_id = "etienne-samba-diouf"
     conn.execute(
         "INSERT INTO brands (id, name, niche, website, created_at) VALUES (?, ?, ?, ?, ?)",
-        (brand_id, "Jumia Partenaires", "E-commerce", "jumia.com.sn", now),
+        (brand_id, "Systeme.io", "Logiciel marketing", "systeme.io", now),
     )
     conn.execute(
         "INSERT INTO affiliates (id, name, email, company, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (affiliate_id, "Etienne Samba Diouf", "etiouline@gmail.com", "Jumia", "active", now),
+        (affiliate_id, "Etienne Samba Diouf", "etiouline@gmail.com", "Systeme.io", "active", now),
     )
 
     catalog = [
-        ("jumia-smartphone", "AF-bd17bc09-770", "Smartphone Android 64 Go", "High-tech", 45000.0, 0.05, "https://jumia.com.sn/smartphones/"),
-        ("jumia-montre", "AF-a7daaa83-573", "Montre connectee", "High-tech", 18000.0, 0.05, "https://jumia.com.sn/montres/"),
-        ("jumia-casque", "AF-51be0c7d-0f3", "Casque Bluetooth sans fil", "High-tech", 12500.0, 0.05, "https://jumia.com.sn/casques/"),
-        ("jumia-powerbank", "AF-96aa26c2-db7", "Powerbank 20000 mAh", "Accessoires", 9500.0, 0.05, "https://jumia.com.sn/powerbanks/"),
-        ("jumia-beaute", "AF-01974db1-d4d", "Produits beaute et soin", "Beaute", 8000.0, 0.05, "https://jumia.com.sn/beaute/"),
+        ("sys-startup", "AF-SYS-STARTUP", "Systeme.io Startup (27$/mois)", "Abonnement", 27.0, 0.60, "https://systeme.io/"),
+        ("sys-webinar", "AF-SYS-WEBINAR", "Systeme.io Webinar (47$/mois)", "Abonnement", 47.0, 0.60, "https://systeme.io/"),
+        ("sys-unlimited", "AF-SYS-UNLIMIT", "Systeme.io Unlimited (97$/mois)", "Abonnement", 97.0, 0.60, "https://systeme.io/"),
     ]
     for product_id, token, name, category, price, rate, url in catalog:
         conn.execute(
