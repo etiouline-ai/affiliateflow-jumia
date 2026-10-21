@@ -136,59 +136,76 @@ def init_db() -> None:
     conn.commit()
     conn.close()
 
-    seed_demo_data()
+    ensure_seed()
 
 
-def seed_demo_data() -> None:
+SEED_BRAND_ID = "systeme-io"
+SEED_AFFILIATE_ID = "etienne-samba-diouf"
+SEED_AFFILIATE_URL = "https://systeme.io/?sa=sa0023947314562614d0a980991bb60ef97b21813f"
+SEED_CATALOG = [
+    ("sys-startup", "AF-SYS-STARTUP", "Systeme.io Startup (27$/mois)", "Abonnement", 27.0, 0.60),
+    ("sys-webinar", "AF-SYS-WEBINAR", "Systeme.io Webinar (47$/mois)", "Abonnement", 47.0, 0.60),
+    ("sys-unlimited", "AF-SYS-UNLIMIT", "Systeme.io Unlimited (97$/mois)", "Abonnement", 97.0, 0.60),
+]
+SEED_CAMPAIGN = {
+    "id": "campaign-meta-unlimited",
+    "slug": "meta-senegal-systeme-io-unlimited",
+    "name": "Meta Senegal - Systeme.io Unlimited",
+    "platform": "facebook",
+    "link_id": "link-sys-unlimited",
+    "audience": "Entrepreneurs, e-commerce, marketing digital, freelancing",
+    "budget": 15000.0,
+    "daily_budget": 1500.0,
+}
+
+
+def ensure_seed() -> None:
+    """Insere ou repare les donnees Systeme.io (marque, affilie, produits, liens, campagne)."""
     conn = get_db_connection()
-    if conn.execute("SELECT COUNT(*) FROM brands").fetchone()[0] > 0:
-        conn.close()
-        return
-
     now = datetime.utcnow().isoformat()
-    brand_id = "systeme-io"
-    affiliate_id = "etienne-samba-diouf"
-    conn.execute(
-        "INSERT INTO brands (id, name, niche, website, created_at) VALUES (?, ?, ?, ?, ?)",
-        (brand_id, "Systeme.io", "Logiciel marketing", "systeme.io", now),
-    )
-    conn.execute(
-        "INSERT INTO affiliates (id, name, email, company, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (affiliate_id, "Etienne Samba Diouf", "etiouline@gmail.com", "Systeme.io", "active", now),
-    )
 
-    catalog = [
-        ("sys-startup", "AF-SYS-STARTUP", "Systeme.io Startup (27$/mois)", "Abonnement", 27.0, 0.60, "https://systeme.io/?sa=sa0023947314562614d0a980991bb60ef97b21813f"),
-        ("sys-webinar", "AF-SYS-WEBINAR", "Systeme.io Webinar (47$/mois)", "Abonnement", 47.0, 0.60, "https://systeme.io/?sa=sa0023947314562614d0a980991bb60ef97b21813f"),
-        ("sys-unlimited", "AF-SYS-UNLIMIT", "Systeme.io Unlimited (97$/mois)", "Abonnement", 97.0, 0.60, "https://systeme.io/?sa=sa0023947314562614d0a980991bb60ef97b21813f"),
-    ]
-    for product_id, token, name, category, price, rate, url in catalog:
+    if conn.execute("SELECT COUNT(*) FROM brands WHERE id = ?", (SEED_BRAND_ID,)).fetchone()[0] == 0:
         conn.execute(
-            "INSERT INTO products (id, brand_id, name, category, price, commission_rate, url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (product_id, brand_id, name, category, price, rate, url, now),
+            "INSERT INTO brands (id, name, niche, website, created_at) VALUES (?, ?, ?, ?, ?)",
+            (SEED_BRAND_ID, "Systeme.io", "Logiciel marketing", "systeme.io", now),
         )
-    conn.execute(
-        "INSERT INTO affiliate_links (id, affiliate_id, product_id, token, target_url, clicks, conversions, revenue, commission, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (f"link-{product_id}", affiliate_id, product_id, token, url, 0, 0, 0.0, 0.0, now),
-    )
 
-    conn.execute(
-        """
-        INSERT INTO ad_campaigns (id, slug, name, platform, link_id, audience, budget, daily_budget, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-        """,
-        (
-            "campaign-meta-unlimited",
-            "meta-senegal-systeme-io-unlimited",
-            "Meta Senegal - Systeme.io Unlimited",
-            "facebook",
-            "link-sys-unlimited",
-            "Entrepreneurs, e-commerce, marketing digital, freelancing",
-            15000.0,
-            1500.0,
-            now,
-        ),
-    )
+    if conn.execute("SELECT COUNT(*) FROM affiliates WHERE id = ?", (SEED_AFFILIATE_ID,)).fetchone()[0] == 0:
+        conn.execute(
+            "INSERT INTO affiliates (id, name, email, company, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (SEED_AFFILIATE_ID, "Etienne Samba Diouf", "etiouline@gmail.com", "Systeme.io", "active", now),
+        )
+
+    for product_id, token, name, category, price, rate in SEED_CATALOG:
+        if conn.execute("SELECT COUNT(*) FROM products WHERE id = ?", (product_id,)).fetchone()[0] == 0:
+            conn.execute(
+                "INSERT INTO products (id, brand_id, name, category, price, commission_rate, url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (product_id, SEED_BRAND_ID, name, category, price, rate, SEED_AFFILIATE_URL, now),
+            )
+        if conn.execute("SELECT COUNT(*) FROM affiliate_links WHERE id = ?", (f"link-{product_id}",)).fetchone()[0] == 0:
+            conn.execute(
+                "INSERT INTO affiliate_links (id, affiliate_id, product_id, token, target_url, clicks, conversions, revenue, commission, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (f"link-{product_id}", SEED_AFFILIATE_ID, product_id, token, SEED_AFFILIATE_URL, 0, 0, 0.0, 0.0, now),
+            )
+
+    if conn.execute("SELECT COUNT(*) FROM ad_campaigns WHERE id = ?", (SEED_CAMPAIGN["id"],)).fetchone()[0] == 0:
+        conn.execute(
+            """
+            INSERT INTO ad_campaigns (id, slug, name, platform, link_id, audience, budget, daily_budget, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+            """,
+            (
+                SEED_CAMPAIGN["id"],
+                SEED_CAMPAIGN["slug"],
+                SEED_CAMPAIGN["name"],
+                SEED_CAMPAIGN["platform"],
+                SEED_CAMPAIGN["link_id"],
+                SEED_CAMPAIGN["audience"],
+                SEED_CAMPAIGN["budget"],
+                SEED_CAMPAIGN["daily_budget"],
+                now,
+            ),
+        )
 
     conn.commit()
     conn.close()
