@@ -116,9 +116,9 @@ def seed_demo_data() -> None:
     )
 
     catalog = [
-        ("sys-startup", "AF-SYS-STARTUP", "Systeme.io Startup (27$/mois)", "Abonnement", 27.0, 0.60, "https://systeme.io/"),
-        ("sys-webinar", "AF-SYS-WEBINAR", "Systeme.io Webinar (47$/mois)", "Abonnement", 47.0, 0.60, "https://systeme.io/"),
-        ("sys-unlimited", "AF-SYS-UNLIMIT", "Systeme.io Unlimited (97$/mois)", "Abonnement", 97.0, 0.60, "https://systeme.io/"),
+        ("sys-startup", "AF-SYS-STARTUP", "Systeme.io Startup (27$/mois)", "Abonnement", 27.0, 0.60, "https://systeme.io/?sa=sa0023947314562614d0a980991bb60ef97b21813f"),
+        ("sys-webinar", "AF-SYS-WEBINAR", "Systeme.io Webinar (47$/mois)", "Abonnement", 47.0, 0.60, "https://systeme.io/?sa=sa0023947314562614d0a980991bb60ef97b21813f"),
+        ("sys-unlimited", "AF-SYS-UNLIMIT", "Systeme.io Unlimited (97$/mois)", "Abonnement", 97.0, 0.60, "https://systeme.io/?sa=sa0023947314562614d0a980991bb60ef97b21813f"),
     ]
     for product_id, token, name, category, price, rate, url in catalog:
         conn.execute(
