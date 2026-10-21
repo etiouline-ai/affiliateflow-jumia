@@ -1,10 +1,12 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional
+import html
 import os
+import re
 import sqlite3
 import uuid
 from pathlib import Path
@@ -13,6 +15,18 @@ from datetime import datetime
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("DB_PATH") or (BASE_DIR / "affiliateflow.db"))
 PORT = int(os.environ.get("PORT") or 8000)
+FB_PIXEL_ID = os.environ.get("FB_PIXEL_ID", "").strip()
+USD_TO_XOF = float(os.environ.get("USD_TO_XOF", "600"))
+
+AD_PLATFORMS = {
+    "facebook": "Facebook",
+    "instagram": "Instagram",
+    "tiktok": "TikTok",
+    "google": "Google Ads",
+    "whatsapp": "WhatsApp Ads",
+    "email": "Email",
+    "organique": "Organique",
+}
 
 app = FastAPI(title="AffiliateFlow MVP", version="0.1.0")
 app.add_middleware(
@@ -88,6 +102,34 @@ def init_db() -> None:
             amount REAL,
             created_at TEXT NOT NULL,
             FOREIGN KEY (link_id) REFERENCES affiliate_links(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS ad_campaigns (
+            id TEXT PRIMARY KEY,
+            slug TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            link_id TEXT NOT NULL,
+            audience TEXT DEFAULT '',
+            budget REAL DEFAULT 0,
+            daily_budget REAL DEFAULT 0,
+            status TEXT DEFAULT 'active',
+            clicks INTEGER DEFAULT 0,
+            impressions INTEGER DEFAULT 0,
+            conversions INTEGER DEFAULT 0,
+            revenue REAL DEFAULT 0,
+            commission REAL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (link_id) REFERENCES affiliate_links(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS ad_events (
+            id TEXT PRIMARY KEY,
+            campaign_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            amount REAL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (campaign_id) REFERENCES ad_campaigns(id)
         );
         """
     )
@@ -166,6 +208,19 @@ class ConversionCreate(BaseModel):
     link_id: str
     amount: float = Field(ge=0)
     source: str = Field(default="newsletter")
+
+
+class AdCampaignCreate(BaseModel):
+    name: str = Field(..., min_length=2)
+    platform: str = Field(default="facebook")
+    link_id: str
+    audience: str = Field(default="")
+    budget: float = Field(ge=0)
+    daily_budget: float = Field(ge=0)
+
+
+class AdConversionCreate(BaseModel):
+    amount: float = Field(ge=0)
 
 
 @app.on_event("startup")
@@ -323,7 +378,7 @@ def create_link(payload: LinkCreate, request: Request) -> dict:
 
 
 @app.get("/api/track/{token}")
-def track_click(token: str) -> RedirectResponse:
+def track_click(token: str, request: Request) -> RedirectResponse:
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM affiliate_links WHERE token = ?", (token,)).fetchone()
     if row is None:
@@ -336,6 +391,18 @@ def track_click(token: str) -> RedirectResponse:
         "INSERT INTO stats (id, link_id, event_type, source, amount, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         (str(uuid.uuid4()), row["id"], "click", "redirect", 0.0, datetime.utcnow().isoformat()),
     )
+
+    campaign_slug = request.query_params.get("utm_campaign")
+    source = request.query_params.get("utm_source") or "redirect"
+    if campaign_slug:
+        campaign = conn.execute("SELECT * FROM ad_campaigns WHERE slug = ?", (campaign_slug,)).fetchone()
+        if campaign is not None:
+            conn.execute("UPDATE ad_campaigns SET clicks = clicks + 1 WHERE id = ?", (campaign["id"],))
+            conn.execute(
+                "INSERT INTO ad_events (id, campaign_id, event_type, amount, created_at) VALUES (?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), campaign["id"], "click", 0.0, datetime.utcnow().isoformat()),
+            )
+
     conn.commit()
     conn.close()
     return RedirectResponse(url=row["target_url"])
@@ -394,6 +461,273 @@ def get_brand(brand_id: str) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="Brand not found")
     return dict(row)
+
+
+def _slugify(value: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:40]
+    return f"{base}-{str(uuid.uuid4())[:6]}" if base else str(uuid.uuid4())[:8]
+
+
+@app.get("/api/campaigns")
+def get_campaigns() -> list[dict]:
+    conn = get_db_connection()
+    rows = conn.execute(
+        """
+        SELECT c.*, p.name as product_name, l.token, l.target_url, p.price, p.commission_rate
+        FROM ad_campaigns c
+        JOIN affiliate_links l ON l.id = c.link_id
+        JOIN products p ON p.id = l.product_id
+        ORDER BY c.created_at DESC
+        """
+    ).fetchall()
+    conn.close()
+    campaigns = []
+    for row in rows:
+        item = dict(row)
+        item["platform_label"] = AD_PLATFORMS.get(item["platform"], item["platform"])
+        item["ctr"] = round(float(item["clicks"]) / float(item["impressions"]) * 100, 2) if item["impressions"] else 0.0
+        item["cpa"] = round(float(item["budget"]) / float(item["conversions"]), 2) if item["conversions"] else 0.0
+        item["commission_xof"] = round(float(item["commission"]) * USD_TO_XOF, 0)
+        item["roi"] = round(float(item["commission_xof"]) / float(item["budget"]) * 100, 1) if item["budget"] else 0.0
+        campaigns.append(item)
+    return campaigns
+
+
+@app.post("/api/campaigns")
+def create_campaign(payload: AdCampaignCreate, request: Request) -> dict:
+    conn = get_db_connection()
+    link = conn.execute("SELECT * FROM affiliate_links WHERE id = ?", (payload.link_id,)).fetchone()
+    if link is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Link not found")
+
+    slug = _slugify(payload.name)
+    campaign_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO ad_campaigns (id, slug, name, platform, link_id, audience, budget, daily_budget, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+        """,
+        (
+            campaign_id,
+            slug,
+            payload.name,
+            payload.platform,
+            payload.link_id,
+            payload.audience,
+            payload.budget,
+            payload.daily_budget,
+            datetime.utcnow().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    base = str(request.base_url).rstrip("/")
+    utm = f"utm_source={payload.platform}&utm_medium=paid_social&utm_campaign={slug}"
+    return {
+        "id": campaign_id,
+        "slug": slug,
+        "ad_url": f"{base}/api/track/{link['token']}?{utm}",
+        "landing_url": f"{base}/lp/{link['token']}?{utm}",
+        "message": "Campaign created",
+    }
+
+
+@app.get("/api/campaigns/{campaign_id}")
+def get_campaign(campaign_id: str) -> dict:
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT c.*, p.name as product_name, l.token, p.price, p.commission_rate
+        FROM ad_campaigns c
+        JOIN affiliate_links l ON l.id = c.link_id
+        JOIN products p ON p.id = l.product_id
+        WHERE c.id = ?
+        """,
+        (campaign_id,),
+    ).fetchone()
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    events = conn.execute(
+        "SELECT * FROM ad_events WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 50",
+        (campaign_id,),
+    ).fetchall()
+    conn.close()
+    campaign = dict(row)
+    campaign["events"] = [dict(event) for event in events]
+    return campaign
+
+
+@app.post("/api/campaigns/{campaign_id}/conversions")
+def create_campaign_conversion(campaign_id: str, payload: AdConversionCreate) -> dict:
+    conn = get_db_connection()
+    campaign = conn.execute("SELECT * FROM ad_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+    if campaign is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    link = conn.execute("SELECT * FROM affiliate_links WHERE id = ?", (campaign["link_id"],)).fetchone()
+    product = conn.execute("SELECT * FROM products WHERE id = ?", (link["product_id"],)).fetchone()
+    amount = float(payload.amount)
+    commission_value = amount * float(product["commission_rate"])
+
+    conn.execute(
+        """
+        UPDATE ad_campaigns
+        SET conversions = conversions + 1, revenue = revenue + ?, commission = commission + ?
+        WHERE id = ?
+        """,
+        (amount, commission_value, campaign_id),
+    )
+    conn.execute(
+        "INSERT INTO ad_events (id, campaign_id, event_type, amount, created_at) VALUES (?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), campaign_id, "conversion", amount, datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return {"message": "Conversion recorded", "commission": round(commission_value, 2)}
+
+
+@app.post("/api/campaigns/{campaign_id}/status")
+def update_campaign_status(campaign_id: str, status: str) -> dict:
+    if status not in {"active", "paused", "archived"}:
+        raise HTTPException(status_code=400, detail="Status must be active, paused or archived")
+    conn = get_db_connection()
+    conn.execute("UPDATE ad_campaigns SET status = ? WHERE id = ?", (status, campaign_id))
+    conn.commit()
+    conn.close()
+    return {"message": "Status updated", "status": status}
+
+
+@app.get("/api/ads/config")
+def get_ads_config() -> dict:
+    return {
+        "pixel_id": FB_PIXEL_ID,
+        "pixel_active": bool(FB_PIXEL_ID),
+        "platforms": [{"value": key, "label": value} for key, value in AD_PLATFORMS.items()],
+        "playbook": [
+            {
+                "title": "Ciblage par interests",
+                "detail": "Entrepreneurs, e-commerce, marketing digital, freelancing, gestion de business.",
+            },
+            {
+                "title": "Audiences similaires (Lookalike)",
+                "detail": "Cree un Lookalike 1% a partir des acheteurs Systeme.io : ils partagent le meme profil que tes clients payants.",
+            },
+            {
+                "title": "Retargeting pixel",
+                "detail": "Le pixel place sur la landing page (/lp/token) cree une audience de visiteurs a recibler sur Facebook et Instagram.",
+            },
+            {
+                "title": "Budget test",
+                "detail": "Demarre avec 1000-2000 FCFA par jour sur 7 jours. Coupe si aucun clic au bout de 500 impressions.",
+            },
+        ],
+    }
+
+
+LANDING_TEMPLATE = """<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<style>
+  body {{ margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+         background:linear-gradient(160deg,#0f172a,#1e3a8a); color:#fff; min-height:100vh;
+         display:flex; align-items:center; justify-content:center; padding:24px; }}
+  .card {{ max-width:520px; width:100%; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.16);
+           border-radius:22px; padding:32px; text-align:center; }}
+  .pill {{ display:inline-block; background:#22c55e; color:#052e16; font-weight:800; font-size:12px;
+           padding:6px 12px; border-radius:999px; }}
+  h1 {{ font-size:28px; line-height:1.2; margin:18px 0 10px; }}
+  p {{ color:#cbd5e1; line-height:1.6; margin:0 0 22px; }}
+  .cta {{ display:inline-block; background:#22c55e; color:#052e16; font-weight:800; text-decoration:none;
+          padding:15px 30px; border-radius:12px; font-size:16px; }}
+  .count {{ margin-top:18px; font-size:13px; color:#94a3b8; }}
+  .bar {{ height:4px; background:rgba(255,255,255,.15); border-radius:99px; overflow:hidden; margin-top:20px; }}
+  .bar span {{ display:block; height:100%; width:0; background:#22c55e; }}
+</style>
+{pixel}
+</head>
+<body>
+  <div class="card">
+    <span class="pill">{product_name}</span>
+    <h1>{title}</h1>
+    <p>{subtitle}</p>
+    <a class="cta" id="cta" href="{target_url}" onclick="if(window.fbq)fbq('track','Lead');">Acceder a l'offre</a>
+    <div class="count">Redirection automatique dans <span id="left">5</span> secondes</div>
+    <div class="bar"><span id="bar"></span></div>
+  </div>
+  <script>
+    var left = 5;
+    var bar = document.getElementById('bar');
+    setInterval(function () {{
+      left -= 1;
+      document.getElementById('left').textContent = left;
+      bar.style.width = ((5 - left) * 20) + '%';
+      if (left <= 0) window.location.href = "{target_url}";
+    }}, 1000);
+  </script>
+</body>
+</html>
+"""
+
+
+def _pixel_snippet() -> str:
+    if not FB_PIXEL_ID:
+        return ""
+    pixel_id = html.escape(FB_PIXEL_ID, quote=True)
+    return f"""<script>
+!function(f,b,e,v,n,t,s){{if(f.fbq)return;n=f.fbq=function(){{n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)}};if(!f._fbq)f._fbq=n;
+n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}}(window,document,'script','https://connect.facebook.net/fr_FR/fbevents.js');
+fbq('init', '{pixel_id}');
+fbq('track', 'PageView');
+fbq('track', 'ViewContent');
+</script>
+<noscript><img height="1" width="1" style="display:none" alt="" src="https://www.facebook.com/tr?id={pixel_id}&ev=PageView&noscript=1"/></noscript>"""
+
+
+@app.get("/lp/{token}")
+def landing_page(token: str, request: Request) -> HTMLResponse:
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM affiliate_links WHERE token = ?", (token,)).fetchone()
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Tracking link not found")
+    product = conn.execute("SELECT * FROM products WHERE id = ?", (row["product_id"],)).fetchone()
+
+    campaign_slug = request.query_params.get("utm_campaign")
+    if campaign_slug:
+        campaign = conn.execute("SELECT * FROM ad_campaigns WHERE slug = ?", (campaign_slug,)).fetchone()
+        if campaign is not None:
+            conn.execute("UPDATE ad_campaigns SET impressions = impressions + 1 WHERE id = ?", (campaign["id"],))
+            conn.execute(
+                "INSERT INTO ad_events (id, campaign_id, event_type, amount, created_at) VALUES (?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), campaign["id"], "impression", 0.0, datetime.utcnow().isoformat()),
+            )
+    conn.commit()
+    conn.close()
+
+    product_name = html.escape(product["name"] if product else "Offre")
+    title = html.escape(request.query_params.get("title") or f"{product_name} - Offre exclusive")
+    subtitle = html.escape(
+        request.query_params.get("subtitle")
+        or "Acces immediat a l'offre. Paiement securise, annulation possible a tout moment."
+    )
+    target = html.escape(row["target_url"], quote=True)
+    page = LANDING_TEMPLATE.format(
+        title=title,
+        product_name=product_name,
+        subtitle=subtitle,
+        target_url=target,
+        pixel=_pixel_snippet(),
+    )
+    return HTMLResponse(content=page)
 
 
 if __name__ == "__main__":
