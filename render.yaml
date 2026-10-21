@@ -8,9 +8,3 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
-      - key: DB_PATH
-        value: /data/affiliateflow.db
-    disk:
-      name: data
-      mountPath: /data
-      sizeGB: 1
