@@ -15,7 +15,7 @@ from datetime import datetime
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("DB_PATH") or (BASE_DIR / "affiliateflow.db"))
 PORT = int(os.environ.get("PORT") or 8000)
-FB_PIXEL_ID = os.environ.get("FB_PIXEL_ID", "").strip()
+FB_PIXEL_ID = os.environ.get("FB_PIXEL_ID", "").strip() or "1390288544176312"
 USD_TO_XOF = float(os.environ.get("USD_TO_XOF", "600"))
 
 AD_PLATFORMS = {
@@ -167,10 +167,28 @@ def seed_demo_data() -> None:
             "INSERT INTO products (id, brand_id, name, category, price, commission_rate, url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (product_id, brand_id, name, category, price, rate, url, now),
         )
-        conn.execute(
-            "INSERT INTO affiliate_links (id, affiliate_id, product_id, token, target_url, clicks, conversions, revenue, commission, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (f"link-{product_id}", affiliate_id, product_id, token, url, 0, 0, 0.0, 0.0, now),
-        )
+    conn.execute(
+        "INSERT INTO affiliate_links (id, affiliate_id, product_id, token, target_url, clicks, conversions, revenue, commission, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (f"link-{product_id}", affiliate_id, product_id, token, url, 0, 0, 0.0, 0.0, now),
+    )
+
+    conn.execute(
+        """
+        INSERT INTO ad_campaigns (id, slug, name, platform, link_id, audience, budget, daily_budget, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+        """,
+        (
+            "campaign-meta-unlimited",
+            "meta-senegal-systeme-io-unlimited",
+            "Meta Senegal - Systeme.io Unlimited",
+            "facebook",
+            "link-sys-unlimited",
+            "Entrepreneurs, e-commerce, marketing digital, freelancing",
+            15000.0,
+            1500.0,
+            now,
+        ),
+    )
 
     conn.commit()
     conn.close()
@@ -465,7 +483,16 @@ def get_brand(brand_id: str) -> dict:
 
 def _slugify(value: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:40]
-    return f"{base}-{str(uuid.uuid4())[:6]}" if base else str(uuid.uuid4())[:8]
+    return base or "campagne"
+
+
+def _unique_slug(conn: sqlite3.Connection, base: str) -> str:
+    slug = base
+    suffix = 2
+    while conn.execute("SELECT 1 FROM ad_campaigns WHERE slug = ?", (slug,)).fetchone() is not None:
+        slug = f"{base}-{suffix}"
+        suffix += 1
+    return slug
 
 
 @app.get("/api/campaigns")
@@ -501,7 +528,7 @@ def create_campaign(payload: AdCampaignCreate, request: Request) -> dict:
         conn.close()
         raise HTTPException(status_code=404, detail="Link not found")
 
-    slug = _slugify(payload.name)
+    slug = _unique_slug(conn, _slugify(payload.name))
     campaign_id = str(uuid.uuid4())
     conn.execute(
         """
